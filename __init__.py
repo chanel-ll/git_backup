@@ -11,9 +11,9 @@ import pytorch3d.transforms
 import cv2
 
 from utils.system_utils import searchForMaxIteration
-from scene.dataset_readers import sceneLoadTypeCallbacks
+#from scene.dataset_readers import sceneLoadTypeCallbacks
 # KITTI Raw 리더 함수 임포트
-from scene.dataset_readers_raw import readKittiRawSceneInfo
+from scene.dataset_readers import readKittiRawSceneInfo
 
 from arguments import ModelParams
 from utils.camera_utils import cameraList_from_camInfos, camera_to_JSON
@@ -49,7 +49,7 @@ class Scene:
         self.current_level = 0
 
         # --- 데이터셋 타입 감지 및 로드 로직 ---
-        
+        """
         # 1. KITTI-360 감지
         if os.path.exists(os.path.join(args.source_path, "data_3d_raw")):
             dataset_type = 'KITTI360'
@@ -66,9 +66,9 @@ class Scene:
             scene_info_list, all_lidar_points = sceneLoadTypeCallbacks["KITTI360"](root_path = args.source_path, root_image_path = image_path, sequence=scene_id,
                                                                                 cam_id=cam_id, start_index=start_index,
                                                                                 segment_length=30)
-        
+        """
         # 2. [수정됨] KITTI-RAW 감지 (oxts 폴더 존재 여부로 확인)
-        elif os.path.exists(os.path.join(args.source_path, "oxts")) or "KITTI_RAW" in args.source_path or "drive" in args.source_path:
+        if os.path.exists(os.path.join(args.source_path, "oxts")) or "KITTI_RAW" in args.source_path or "drive" in args.source_path:
             dataset_type = 'KITTI_RAW'
             print("Detected KITTI RAW dataset structure.")
             
