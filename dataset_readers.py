@@ -1,4 +1,4 @@
-#
+
 # Copyright (C) 2023, Inria
 # GRAPHDECO research group, https://team.inria.fr/graphdeco
 # All rights reserved.
@@ -179,12 +179,31 @@ class KittiRawLoader:
         cam2cam_path = os.path.join(self.calib_folder, "calib_cam_to_cam.txt")
         c2c_data = self._read_calib_file(cam2cam_path)
         
+        # 1. Projection Matrix (P_rect_xx)
+        # P = K @ [I|t] 형태 (Rectified 기준)
         P_rect = c2c_data[f'P_rect_{self.cam_id}'].reshape(3, 4)
-        R_rect = c2c_data[f'R_rect_{self.cam_id}'].reshape(3, 3)
+        
+        # Intrinsic (K) 추출
         K = P_rect[:3, :3]
         
+        # 2. Baseline Offset 계산 (핵심 수정!)
+        # P_rect[0, 3] = fx * baseline_x
+        # 따라서 baseline_x = P_rect[0, 3] / fx
+        fx = K[0, 0]
+        baseline_x = P_rect[0, 3] / fx
+        baseline_y = P_rect[1, 3] / K[1, 1] # 보통 0
+        baseline_z = P_rect[2, 3]  # 보통 0
+        
+        # T_ref_to_current: 기준 카메라(00)에서 현재 카메라(xx)로의 이동 변환
+        T_ref_to_current = np.eye(4)
+        T_ref_to_current[0, 3] = baseline_x
+        T_ref_to_current[1, 3] = baseline_y
+        T_ref_to_current[2, 3] = baseline_z
+        
+        R_rect = c2c_data[f'R_rect_00'].reshape(3, 3) # 기준 카메라(00)의 Rectification 사용
         R0_rect_4x4 = np.eye(4)
         R0_rect_4x4[:3, :3] = R_rect
+        
         calib['R0_rect'] = R0_rect_4x4
         calib['K'] = K
         calib['D'] = np.zeros(5) 
@@ -204,7 +223,10 @@ class KittiRawLoader:
         Tr_imu_to_velo[:3, 3] = i2v_data['T']
         calib['Tr_imu_to_velo'] = Tr_imu_to_velo
 
-        calib['T_imu_to_cam'] = R0_rect_4x4 @ Tr_velo_to_cam @ Tr_imu_to_velo
+        # [최종 수정] 체인에 Baseline 이동 추가
+        # IMU -> Velo -> Ref Cam(00) -> Rect Ref Cam(00) -> Current Cam(xx)
+        calib['T_imu_to_cam'] = T_ref_to_current @ R0_rect_4x4 @ Tr_velo_to_cam @ Tr_imu_to_velo
+        
         return calib
 
     def _load_oxts_and_convert(self):
