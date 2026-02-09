@@ -21,21 +21,8 @@ def loadCam(args, id, cam_info, resolution_scale, is_nerf_synthetic, is_test_dat
     image = Image.open(cam_info.image_path)
 
     orig_w, orig_h = image.size
-    
-    # CRITICAL FIX: K, D를 먼저 초기화
-    K = cam_info.K.copy()
-    D = cam_info.D.copy()
-    
     if args.resolution in [1, 2, 4, 8]:
         resolution = round(orig_w/(resolution_scale * args.resolution)), round(orig_h/(resolution_scale * args.resolution))
-        
-        # K 스케일링 추가
-        x_scale = float(orig_w)/float(resolution[0])
-        y_scale = float(orig_h)/float(resolution[1])
-        K[0,0] /= x_scale
-        K[1,1] /= y_scale
-        K[0,2] /= x_scale
-        K[1,2] /= y_scale
 
     else:  # should be a type that converts to float
         if args.resolution == -1:
@@ -51,25 +38,21 @@ def loadCam(args, id, cam_info, resolution_scale, is_nerf_synthetic, is_test_dat
         else:
             global_down = orig_w / args.resolution
     
+
         scale = float(global_down) * float(resolution_scale)
         resolution = (int(orig_w / scale), int(orig_h / scale))
-        
-        # K 스케일링
+        K = cam_info.K.copy()
         x_scale = float(orig_w)/float(resolution[0])
         y_scale = float(orig_h)/float(resolution[1])
         K[0,0] /= x_scale
         K[1,1] /= y_scale
         K[0,2] /= x_scale
         K[1,2] /= y_scale
-    
-    # CRITICAL FIX: R, T도 .copy() 추가
-    return Camera(resolution, colmap_id=cam_info.uid, 
-                  R=cam_info.R.copy(), 
-                  T=cam_info.T.copy(), 
-                  FoVx=cam_info.FovX, FoVy=cam_info.FovY, 
-                  K=K, D=D,
+        D = cam_info.D.copy()
+    return Camera(resolution, colmap_id=cam_info.uid, R=cam_info.R, T=cam_info.T, 
+                  FoVx=cam_info.FovX, FoVy=cam_info.FovY, K=K, D=D,
                   image=image, image_name=cam_info.image_name, uid=id,
-                  data_device=args.data_device, train_test_exp=args.train_test_exp,
+                  data_device=args.data_device,train_test_exp=args.train_test_exp,
                   is_test_dataset=is_test_dataset, is_test_view=cam_info.is_test)
 
 def cameraList_from_camInfos(cam_infos, resolution_scale, args, is_nerf_synthetic, is_test_dataset):
@@ -97,7 +80,7 @@ def camera_to_JSON(id, camera : Camera):
         'height' : camera.height,
         'position': pos.tolist(),
         'rotation': serializable_array_2d,
-        'fx' : fov2focal(camera.FovX, camera.width),
-        'fy' : fov2focal(camera.FovY, camera.height)
+        'fy' : fov2focal(camera.FovY, camera.height),
+        'fx' : fov2focal(camera.FovX, camera.width)
     }
     return camera_entry

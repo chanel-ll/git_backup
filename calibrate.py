@@ -32,8 +32,6 @@ from visualizer.image_visualizer import project_lidar_to_image_with_projection, 
     project_to_pixel_torch, get_3d_points_from_pixels_depth_mask_torch
 import torch.nn.functional as F
 import time
-from datetime import datetime
-
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -374,24 +372,13 @@ def generate_all_depths(scene, pipe, background, resolution_scale, train_test_ex
 
 
 def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoint_iterations, checkpoint, debug_from):
-    
-    writer = None
-    if TENSORBOARD_FOUND:
-        current_time = datetime.now().strftime("%Y%m%d-%H%M%S")
-        # 로그는 'runs/calibrate_현재시간' 폴더에 저장됩니다.
-        test_type = "voxel res_0.2"
-        log_dir = f"runs/calib_{test_type}_{current_time}" 
-        writer = SummaryWriter(log_dir)
-        print(f"--- TensorBoard 로깅을 시작합니다. 로그 디렉토리: {log_dir} ---")
-    
-    
     if not SPARSE_ADAM_AVAILABLE and opt.optimizer_type == "sparse_adam":
         sys.exit(
             f"Trying to use sparse adam but it is not installed, please install the correct rasterizer using pip install [3dgs_accel].")
 
     first_iter = 0
-    resolution_scales = [4., 2., 1., 1.] 
-    voxel_resolutions = [0.2, 0.2, 0.2, 0.2]
+    resolution_scales = [4., 2., 1., 1.]
+    voxel_resolutions = [0.1, 0.1, 0.1, 0.1]
     initial_resolution = resolution_scales[0]
     change_iteration = [0, 2000, 4000, 8000]
     per_level_iterations = [2000, 2000, 4000, 7000]
@@ -469,7 +456,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         # if iteration % 1000 == 0:
         #     gaussians.oneupSHdegree()
 
-        # 1단계 : Gaussian Initialization
         if iteration >= change_iteration[1] and current_scale_index == 0:
             print('Change to pyramid level 1')
             current_scale_index = 1
@@ -480,7 +466,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #Update learning rate
             scene.sensor_trajectory.update_learning_rate(lr_ratio[current_scale_index])
             print('Current point size: ', len(gaussians._xyz))
-        # 2단계 : Projection Phase
         elif iteration >= change_iteration[2] and current_scale_index == 1:
             print('Change to pyramid level 2')
             current_scale_index = 2
@@ -495,7 +480,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             #Update learning rate
             scene.sensor_trajectory.update_learning_rate(lr_ratio[current_scale_index])
             print('Current point size: ', len(gaussians._xyz))
-        # 3단계 : Fine-tuning Phase
         elif iteration >= change_iteration[3] and current_scale_index == 2:
             print('Change to pyramid level 3')
             current_scale_index = 3
@@ -564,7 +548,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         else:
             Ll1 = l1_loss(image[image_mask], gt_image[image_mask])
 
-        # SSIM (Rendering Loss 계산에 필요)
         if FUSED_SSIM_AVAILABLE:
             ssim_value = fused_ssim(image.unsqueeze(0), gt_image.unsqueeze(0))
         else:
@@ -589,8 +572,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         inv_depth2 = 1. / render_pkg_depth['depth'].detach()
         depth_mask2[inv_depth2 > max_depth] = False
         depth_mask2[inv_depth2 < min_depth] = False
-
-        # Depth Loss (Gaussian의 geometry 제한)
         depth_loss = compute_depth_error(point_cloud_lidar, scene, depth_P, render_pkg_depth['depth'],
                                              depth_mask2.detach())
 
@@ -598,8 +579,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
         end_time_loss_depth = time.perf_counter()
         execution_time_loss_depth = end_time_loss_depth - start_time
         match_loss = 0.
-
-        # LCPG Loss
         if scene.sensor_trajectory.rotation_cl_delta.requires_grad and current_scale_index<3:
             visualize_match = False
             match_loss = compute_match_loss(
@@ -623,41 +602,17 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
 
         loss = depth_loss * 10
         loss += match_loss
-
-        # Rendering loss, Model Loss 구할 때 이용
         if (not scene.sensor_trajectory.rotation_cl_delta.requires_grad  ) or current_scale_index >=3:
             loss += ((1.0 - opt.lambda_dssim) * Ll1)
             loss += opt.lambda_dssim * (1.0 - ssim_value)
 
-        # Scale norm loss == Regularization loss
+        # Scale norm loss
         observable_mask = radii > 0.
         visible_scaling = gaussians.get_scaling[observable_mask]
         scale_constraint = torch.max(visible_scaling, dim=1).values / (torch.min(visible_scaling, dim=1).values + 1e-7)
         clip_constraint = torch.clip(scale_constraint - 10, min=0.)
         scaling_loss = torch.mean(clip_constraint)
         loss += 3e-2 * scaling_loss
-
-        #-add-
-        if TENSORBOARD_FOUND:
-            # EMA Loss (부드러운 Loss 그래프)
-            writer.add_scalar('Loss/total_ema', ema_loss_for_log, iteration)
-            # photo_loss
-            writer.add_scalar('Loss/photo_loss', loss.item(), iteration)
-            writer.add_scalar('Loss/l1_loss', Ll1.item(), iteration)
-            writer.add_scalar('Loss/ssim_value', ssim_value.item(), iteration)
-
-        # 3. 특정 주기마다 TensorBoard에 이미지 기록 (예: 100번 반복마다)
-        if TENSORBOARD_FOUND and iteration % 100 == 0:
-            writer.add_image('Images/rendered_image', image, iteration)
-            writer.add_image('Images/ground_truth_image', gt_image, iteration)
-
-
-        rotation_err, translation_err = scene.sensor_trajectory.get_extrinsic_error()
-        if TENSORBOARD_FOUND:
-            writer.add_scalar('Loss/rot_Error', torch.norm(rotation_err).item(), iteration)
-            writer.add_scalar('Loss/t_Error', torch.norm(translation_err).item(), iteration)
-
-
         loss.backward()
         iter_end.record()
 
@@ -720,28 +675,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
             ema_loss_for_log = 0.4 * loss.item() + 0.6 * ema_loss_for_log
             if iteration % 10 == 0:
                 rotation_err, translation_err = scene.sensor_trajectory.get_extrinsic_error()
-
-                # # --add--
-                # if TENSORBOARD_FOUND and writer is not None:
-                #     # EMA Loss (부드러운 Loss 그래프)
-                #     writer.add_scalar('Loss/total_ema', ema_loss_for_log, iteration)
-                #     # 현재 스텝의 Raw Loss
-                #     writer.add_scalar('Loss/total_raw', loss.item(), iteration)
-                    
-                #     # 개별 Loss 항목들
-                #     writer.add_scalar('Loss/l1', Ll1.item(), iteration)
-                #     # SSIM은 '값'이므로 (1.0 - 값)을 Loss로 기록하거나, 값 자체를 'Metric'으로 기록
-                #     writer.add_scalar('Metric/ssim', ssim_value.item(), iteration) 
-                #     writer.add_scalar('Loss/depth', depth_loss.item(), iteration)
-                #     writer.add_scalar('Loss/scaling', scaling_loss.item(), iteration)
-                    
-                #     if torch.is_tensor(match_loss):
-                #         writer.add_scalar('Loss/match', match_loss.item(), iteration)
-
-                #     # Calibration Error
-                #     writer.add_scalar('Error/rotation_norm', torch.norm(rotation_err).item(), iteration)
-                #     writer.add_scalar('Error/translation_norm', torch.norm(translation_err).item(), iteration)
-
                 if torch.is_tensor(match_loss):
                     match_loss_info = match_loss.item()
                 progress_bar.set_postfix({"Loss": f"{ema_loss_for_log:.{7}f}", "rotation_err": rotation_err.numpy().tolist(),
@@ -792,12 +725,6 @@ def training(dataset, opt, pipe, testing_iterations, saving_iterations, checkpoi
     print('Calibrated translation: ')
     print(scene.sensor_trajectory.translation_cl.detach().cpu().numpy())
 
-    # --- [추가 시작] TensorBoard Writer 종료 ---
-    if TENSORBOARD_FOUND and writer is not None:
-        writer.close()
-        print("--- TensorBoard 로깅을 완료했습니다. ---")
-    # --- [추가 끝] ---
-
 
 if __name__ == "__main__":
     # Set up command line argument parser
@@ -818,15 +745,11 @@ if __name__ == "__main__":
     parser.add_argument("--start_checkpoint", type=str, default=None)
     parser.add_argument("--cam_id", type=str, default=None)
     parser.add_argument("--data_seq", type=int, default=None)
-    parser.add_argument("--start_index", type=int, default=0)
-    parser.add_argument("--segment_length", type=int, default=30)
 
     args = parser.parse_args(sys.argv[1:])
     args.save_iterations.append(args.iterations)
     lp.cam_id = args.cam_id
     lp.data_seq = args.data_seq
-    lp.start_index = args.start_index
-    lp.segment_length = args.segment_length
     # print("Optimizing " + args.model_path)
 
     # Initialize system state (RNG)

@@ -298,16 +298,8 @@ class Kitti360Loader:
 
     def load_all_pose(self):
         poses = np.loadtxt(os.path.join(self.pose_path, "poses.txt"))
-        # 전체 인덱스 중 실제 .bin 파일이 존재하는 것만 필터링
-        all_indices = (poses[:, 0]).astype(np.int32)
-        effective_indices = []
-    
-        for idx in all_indices:
-            # 파일이 존재하는지 확인 (10자리 패딩)
-            if os.path.exists(os.path.join(self.velodyne_path, f"{idx:010d}.bin")):
-                effective_indices.append(idx)
-                
-        return poses, np.array(effective_indices)
+        effective_indices = (poses[:,0]).astype(np.int32)
+        return poses, effective_indices
 
     def load_pose(self, frame_id):
         poses = self.all_poses
@@ -373,7 +365,6 @@ class Kitti360Loader:
 
 
 def readKITTI360SceneInfo(root_path, root_image_path, sequence="00", cam_id='00', start_index = 0, segment_length = 10):
-    print("KITTI360 작동")
     kitti_loader = Kitti360Loader(
         root_path=root_path,
         root_image_path=root_image_path,
