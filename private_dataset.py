@@ -98,16 +98,10 @@ class PrivateDataset(Dataset):
             lidar_file = os.path.join(self.lidar_path, lidar_name)
             if os.path.exists(lidar_file):
                 if lidar_postfix == "bin":
-                    # KITTI .bin 바이너리 파일을 직접 읽어옵니다.
-                    # float32 형태로 읽어와서 (N, 4) 형태로 형태를 맞춥니다.
                     scan = np.fromfile(lidar_file, dtype=np.float32).reshape(-1, 4)
-                    points = scan[:, :3] # x, y, z 좌표
-                    
-                    # KITTI의 intensity는 4번째 열에 존재합니다.
-                    # 기존 pcd 읽기 코드와 호환성을 맞추기 위해 2차원 배열로 유지합니다.
-                    intensity = scan[:, 3:4] 
+                    points = scan[:, :3]
+                    intensity = scan[:, 3:4]
                 else:
-                    # 기존 .pcd 및 .ply 처리 로직 유지
                     o3d_pcd = o3d.t.io.read_point_cloud(lidar_file)
                     points = o3d_pcd.point["positions"].numpy()
                     if "intensity" in o3d_pcd.point:
@@ -119,6 +113,16 @@ class PrivateDataset(Dataset):
         if points is None:
             raise ValueError(
                 f"Cannot find pointcloud w.r.t the image {image_name} in the directory {self.lidar_path}")
+
+        # ✅ [KITTI-360 전방 필터링]
+        # KITTI-360 Velodyne HDL-64E는 360도 회전 LiDAR로 전방위 포인트를 포함합니다.
+        # LiDAR 좌표계에서 x축이 전방이므로 x > 0인 포인트만 남깁니다.
+        # 이를 통해 카메라 FOV 밖(후방/측면) 포인트를 제거하여
+        # pearson_loss 계산 시 올바른 depth map이 생성됩니다.
+        forward_mask = points[:, 0] > 0
+        points = points[forward_mask]
+        if intensity is not None:
+            intensity = intensity[forward_mask]
 
         if self.points_down_sample_step > 1:
             points = points[::int(self.points_down_sample_step)]
